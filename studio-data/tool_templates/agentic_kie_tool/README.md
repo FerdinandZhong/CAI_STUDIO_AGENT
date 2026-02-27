@@ -15,6 +15,16 @@ Supports two modes:
 - **Open schema** (default): Dynamic field discovery in pass-1.
 - **Closed schema**: Extract only specified `target_fields` using Paddle candidates above a threshold.
 
+## Architecture
+
+![Agentic KIE Architecture](agentic_kie_architecture.png)
+
+The diagram above illustrates the multi-agent workflow:
+1. **Input** is received (image path/URL + schema mode)
+2. **Paddle Retrieval Agent** and **Rolm Discovery Agent** process the image in parallel
+3. **Master Agent** merges and reconciles results from both agents
+4. **Output** is returned in the requested format (deterministic or full)
+
 ## UserParameters (Tool Configuration)
 
 | Parameter         | Type | Required | Default            | Description                                      |
