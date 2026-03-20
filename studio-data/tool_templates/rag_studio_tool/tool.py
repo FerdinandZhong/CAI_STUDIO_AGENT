@@ -16,25 +16,41 @@ class UserParameters(BaseModel):
         base_url (str): The base URL of the RAG Studio (e.g., 'https://ragstudio-xxx.cloudera.site').
         api_key (str): API key for authentication.
         knowledge_base_name (str): Name of the default knowledge base (data source) to query.
+        project_id (int): The project ID for session creation.
         inference_model (Optional[str]): The inference model to use for generating responses.
+        response_chunks (int): Number of chunks to return in responses.
         timeout_seconds (int): HTTP timeout in seconds.
     """
     base_url: str = Field(description="The base URL of the RAG Studio API")
     api_key: str = Field(description="API key for RAG Studio authentication")
     knowledge_base_name: str = Field(description="Name of the knowledge base (data source) to query (e.g., 'Local Companies')")
+    project_id: int = Field(default=1, description="The project ID for session creation")
     inference_model: Optional[str] = Field(default=None, description="The inference model to use (e.g., 'gpt-4')")
+    response_chunks: int = Field(default=5, description="Number of chunks to return in responses (default: 5)")
     timeout_seconds: int = Field(default=60, description="HTTP timeout in seconds")
 
 
 class ToolParameters(BaseModel):
-    action: Literal["query", "list_knowledge_bases"] = Field(
-        description="Action to perform: 'query' (search the configured knowledge base), 'list_knowledge_bases' (list all available knowledge bases)"
+    action: Literal["query", "list_knowledge_bases", "get_chat_history", "get_sessions", "upload_document"] = Field(
+        description="Action to perform: 'query' (search the knowledge base), 'list_knowledge_bases' (list all knowledge bases), 'get_chat_history' (get chat history with evaluations for a session), 'get_sessions' (list all sessions), 'upload_document' (upload a document to a knowledge base)"
     )
 
     # Query parameters
     query: Optional[str] = Field(
         default=None,
         description="The question or search query to send to the RAG system (required for 'query' action)"
+    )
+
+    # Session ID for chat history
+    session_id: Optional[int] = Field(
+        default=None,
+        description="Session ID for 'get_chat_history' action"
+    )
+
+    # Document upload parameters
+    file_path: Optional[str] = Field(
+        default=None,
+        description="Local file path of the document to upload (required for 'upload_document' action)"
     )
 
 
@@ -83,21 +99,67 @@ def find_data_source_by_name(data_sources: List[Dict], name: str) -> Optional[Di
 
 
 def create_session(base_url: str, headers: Dict[str, str],
-                   data_source_ids: List[int], inference_model: Optional[str],
+                   data_source_ids: List[int], project_id: int,
+                   inference_model: Optional[str], response_chunks: int,
                    timeout: int) -> Dict:
     """Create a new RAG session."""
     endpoint = f"{base_url}/api/v1/rag/sessions"
     payload = {
-        "name": f"Query Session",
+        "name": "Query Session",
         "dataSourceIds": data_source_ids,
+        "projectId": project_id,
+        "responseChunks": response_chunks,
         "queryConfiguration": {
-            "disableStreaming": True
+            "disableStreaming": False
         }
     }
     if inference_model:
         payload["inferenceModel"] = inference_model
 
     response = _make_request("POST", endpoint, headers, json_data=payload, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_sessions(base_url: str, headers: Dict[str, str], timeout: int) -> List[Dict]:
+    """Get all available sessions."""
+    endpoint = f"{base_url}/api/v1/rag/sessions"
+    response = _make_request("GET", endpoint, headers, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_chat_history(base_url: str, headers: Dict[str, str],
+                     session_id: int, timeout: int) -> Dict:
+    """Get chat history for a session, including evaluations."""
+    endpoint = f"{base_url}/llm-service/sessions/{session_id}/chat-history"
+    response = _make_request("GET", endpoint, headers, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def upload_document(base_url: str, api_key: str, data_source_id: int,
+                    file_path: str, timeout: int) -> Dict:
+    """Upload a document to a knowledge base (data source)."""
+    import os
+
+    endpoint = f"{base_url}/api/v1/rag/dataSources/{data_source_id}/files"
+
+    # Prepare headers for multipart upload (no Content-Type, let requests set it)
+    headers = {
+        'accept': 'application/json',
+        'Authorization': f'Bearer {api_key}'
+    }
+
+    # Prepare the file for upload
+    filename = os.path.basename(file_path)
+    with open(file_path, 'rb') as f:
+        files = {'file': (filename, f)}
+        response = requests.post(
+            endpoint, headers=headers, files=files,
+            timeout=timeout, allow_redirects=True
+        )
+
     response.raise_for_status()
     return response.json()
 
@@ -129,6 +191,7 @@ def send_chat_message(base_url: str, headers: Dict[str, str], session_id: int,
     # Collect streamed response chunks
     full_response = []
     sources = []
+    response_id = None
 
     for line in response.iter_lines(decode_unicode=True):
         if not line:
@@ -143,14 +206,22 @@ def send_chat_message(base_url: str, headers: Dict[str, str], session_id: int,
 
         try:
             chunk = json.loads(line)
-            # Extract text content from various possible formats
             if isinstance(chunk, dict):
-                # Format: {"content": "..."}
-                if 'content' in chunk:
-                    full_response.append(chunk['content'])
-                # Format: {"text": "..."}
-                elif 'text' in chunk:
+                # Skip event messages (thinking, agent_done, chat_done)
+                if 'event' in chunk:
+                    continue
+
+                # Extract response_id
+                if 'response_id' in chunk:
+                    response_id = chunk['response_id']
+                    continue
+
+                # Format: {"text": "..."} - RAG Studio format
+                if 'text' in chunk:
                     full_response.append(chunk['text'])
+                # Format: {"content": "..."}
+                elif 'content' in chunk:
+                    full_response.append(chunk['content'])
                 # Format: {"delta": {"content": "..."}}
                 elif 'delta' in chunk and isinstance(chunk['delta'], dict):
                     if 'content' in chunk['delta']:
@@ -162,18 +233,22 @@ def send_chat_message(base_url: str, headers: Dict[str, str], session_id: int,
                         full_response.append(choice['delta']['content'])
                     elif 'text' in choice:
                         full_response.append(choice['text'])
+
                 # Extract sources if present
                 if 'sources' in chunk:
                     sources.extend(chunk['sources'])
                 elif 'references' in chunk:
                     sources.extend(chunk['references'])
+                elif 'source_nodes' in chunk:
+                    sources.extend(chunk['source_nodes'])
         except json.JSONDecodeError:
             # If not JSON, treat as plain text
             full_response.append(line)
 
     return {
         "answer": "".join(full_response),
-        "sources": sources
+        "sources": sources,
+        "response_id": response_id
     }
 
 
@@ -193,6 +268,18 @@ def run_tool(config: UserParameters, args: ToolParameters) -> str:
         # Handle 'query' action
         elif args.action == "query":
             return handle_query(base_url, headers, timeout, config, args)
+
+        # Handle 'get_sessions' action
+        elif args.action == "get_sessions":
+            return handle_get_sessions(base_url, headers, timeout)
+
+        # Handle 'get_chat_history' action
+        elif args.action == "get_chat_history":
+            return handle_get_chat_history(base_url, headers, timeout, args)
+
+        # Handle 'upload_document' action
+        elif args.action == "upload_document":
+            return handle_upload_document(base_url, headers, timeout, config, args)
 
         else:
             return f"Error: Unsupported action '{args.action}'."
@@ -247,7 +334,9 @@ def handle_query(base_url: str, headers: Dict[str, str],
         session = create_session(
             base_url, headers,
             data_source_ids=[data_source_id],
+            project_id=config.project_id,
             inference_model=config.inference_model,
+            response_chunks=config.response_chunks,
             timeout=timeout
         )
         session_id = session.get('id')
@@ -287,6 +376,105 @@ def handle_query(base_url: str, headers: Dict[str, str],
         # Clean up session
         if session_id:
             delete_session(base_url, headers, session_id, timeout)
+
+
+def handle_get_sessions(base_url: str, headers: Dict[str, str], timeout: int) -> str:
+    """List all available sessions."""
+    sessions = get_sessions(base_url, headers, timeout)
+
+    if not sessions:
+        return "No sessions found in RAG Studio."
+
+    formatted = ["Available Sessions:\n"]
+    for session in sessions:
+        formatted.append(
+            f"- ID: {session.get('id', 'N/A')}\n"
+            f"  Name: {session.get('name', 'N/A')}\n"
+            f"  Data Sources: {session.get('dataSourceIds', [])}\n"
+            f"  Inference Model: {session.get('inferenceModel', 'N/A')}\n"
+        )
+
+    return "\n".join(formatted)
+
+
+def handle_get_chat_history(base_url: str, headers: Dict[str, str],
+                            timeout: int, args: ToolParameters) -> str:
+    """Get chat history with evaluations for a session."""
+    if not args.session_id:
+        return "Error: 'session_id' parameter is required for 'get_chat_history' action."
+
+    history = get_chat_history(base_url, headers, args.session_id, timeout)
+
+    if not history or not history.get('data'):
+        return f"No chat history found for session {args.session_id}."
+
+    formatted = [f"Chat History for Session {args.session_id}:\n"]
+
+    for entry in history.get('data', []):
+        rag_message = entry.get('rag_message', {})
+        evaluations = entry.get('evaluations', [])
+        source_nodes = entry.get('source_nodes', [])
+
+        formatted.append(f"--- Message ID: {entry.get('id', 'N/A')} ---")
+        formatted.append(f"User: {rag_message.get('user', 'N/A')}")
+        formatted.append(f"Assistant: {rag_message.get('assistant', 'N/A')[:500]}...")
+
+        if evaluations:
+            formatted.append("Evaluations:")
+            for eval_item in evaluations:
+                name = eval_item.get('name', 'unknown')
+                value = eval_item.get('value', 'N/A')
+                formatted.append(f"  - {name}: {value}")
+
+        if source_nodes:
+            formatted.append(f"Sources: {len(source_nodes)} documents retrieved")
+
+        formatted.append("")
+
+    return "\n".join(formatted)
+
+
+def handle_upload_document(base_url: str, headers: Dict[str, str],
+                           timeout: int, config: UserParameters,
+                           args: ToolParameters) -> str:
+    """Handle document upload to a knowledge base."""
+    import os
+
+    if not args.file_path:
+        return "Error: 'file_path' parameter is required for 'upload_document' action."
+
+    if not os.path.exists(args.file_path):
+        return f"Error: File not found: {args.file_path}"
+
+    # Get all data sources to find the target knowledge base
+    data_sources = get_data_sources(base_url, headers, timeout)
+
+    # Find the target data source using the configured knowledge_base_name
+    data_source = find_data_source_by_name(data_sources, config.knowledge_base_name)
+
+    if not data_source:
+        available = ", ".join([f"'{ds.get('name', 'Unknown')}'" for ds in data_sources])
+        return f"Error: Knowledge base '{config.knowledge_base_name}' not found. Available: {available}"
+
+    data_source_id = data_source.get('id')
+    data_source_name = data_source.get('name')
+
+    try:
+        result = upload_document(
+            base_url, config.api_key, data_source_id,
+            args.file_path, timeout
+        )
+
+        filename = os.path.basename(args.file_path)
+        return (
+            f"Document uploaded successfully!\n"
+            f"  File: {filename}\n"
+            f"  Knowledge Base: {data_source_name} (ID: {data_source_id})\n"
+            f"  Response: {result}"
+        )
+
+    except requests.exceptions.RequestException as e:
+        return f"Error uploading document: {str(e)}"
 
 
 OUTPUT_KEY = "tool_output"
