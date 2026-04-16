@@ -1,0 +1,24 @@
+# Core
+memsearch>=0.1.18
+fastmcp>=2.0.0
+
+# Embedding provider extras — uncomment ONE block based on your setup.
+
+# --- Option A: OpenAI-compatible endpoint (default) ---
+# No extra install needed; memsearch[openai] is the base.
+# Set MEMSEARCH_EMBEDDING_API_KEY and optionally MEMSEARCH_EMBEDDING_BASE_URL.
+
+# --- Option B: Fully local, zero cost (sentence-transformers) ---
+# memsearch[local]
+# Installs: sentence-transformers, einops  (~500 MB model download on first run)
+# No API key required. Set MEMSEARCH_EMBEDDING_PROVIDER=local
+
+# --- Option C: Local via Ollama (zero cost, requires Ollama server) ---
+# memsearch[ollama]
+# Requires: Ollama running at http://localhost:11434
+# Set MEMSEARCH_EMBEDDING_PROVIDER=ollama
+# Set MEMSEARCH_EMBEDDING_MODEL=nomic-embed-text (or any Ollama embedding model)
+
+# --- Option D: ONNX (zero cost, lighter than sentence-transformers) ---
+# memsearch[onnx]
+# Set MEMSEARCH_EMBEDDING_PROVIDER=onnx

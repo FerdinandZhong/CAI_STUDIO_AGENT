@@ -278,3 +278,5 @@ db/
 # Node
 .nvm/
 re_configs/
+
+.omc
