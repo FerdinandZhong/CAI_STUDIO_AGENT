@@ -154,6 +154,7 @@ class MCPInstance(Base, MappedProtobuf, MappedDict):
     activated_tools = Column(JSON, nullable=False) # List of tool names accessible to the agent
     status = Column(String, nullable=False, default=consts.MCPStatus.VALIDATING)
     mcp_image_path = Column(Text, nullable=False)
+    is_memory_managed = Column(Boolean, default=False, nullable=False)
 
 class Agent(Base, MappedProtobuf, MappedDict):
     __tablename__ = "agents"
@@ -193,6 +194,9 @@ class Agent(Base, MappedProtobuf, MappedDict):
 
     # Image path for the agent
     agent_image_path = Column(Text, nullable=True)
+
+    # Memory participation mode: NONE | READ_ONLY | WRITE_ONLY | READ_WRITE
+    memory_mode = Column(String, nullable=False, default="NONE")
 
 
 class Task(Base, MappedProtobuf, MappedDict):
@@ -369,6 +373,25 @@ class TaskTemplate(Base, MappedProtobuf, MappedDict):
         )
 
 
+class WorkflowMemoryConfig(Base, MappedDict):
+    __tablename__ = "workflow_memory_config"
+
+    id = Column(String, primary_key=True, nullable=False)
+    workflow_id = Column(String, ForeignKey("workflows.id"), nullable=False, unique=True)
+    enabled = Column(Boolean, default=False, nullable=False)
+    collection_name = Column(String, nullable=False)
+    auto_inject = Column(Boolean, default=True, nullable=False)
+    # CROSS_SESSION | SESSION_SCOPED
+    session_scope = Column(String, nullable=False, default="CROSS_SESSION")
+    # AGENT_CONTROLLED | AUTO_WRITE | DISABLED
+    store_mode = Column(String, nullable=False, default="AGENT_CONTROLLED")
+    filter_config = Column(JSON, nullable=True)
+    backend_config = Column(JSON, nullable=True)
+    note_schema = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+
+
 # Table-to-model mapping
 TABLE_TO_MODEL_REGISTRY = {
     "models": Model,
@@ -381,7 +404,8 @@ TABLE_TO_MODEL_REGISTRY = {
     "workflows": Workflow,
     "workflow_templates": WorkflowTemplate,
     "agent_templates": AgentTemplate,
-    "task_templates": TaskTemplate
+    "task_templates": TaskTemplate,
+    "workflow_memory_config": WorkflowMemoryConfig,
 }
 
 MODEL_TO_TABLE_REGISTRY = {v: k for k, v in TABLE_TO_MODEL_REGISTRY.items()}

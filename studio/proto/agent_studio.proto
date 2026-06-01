@@ -97,6 +97,10 @@ service AgentStudio {
   rpc GetAssetData (GetAssetDataRequest) returns (GetAssetDataResponse) {}
   rpc GetParentProjectDetails (GetParentProjectDetailsRequest) returns (GetParentProjectDetailsResponse) {}
   rpc CheckStudioUpgradeStatus (CheckStudioUpgradeStatusRequest) returns (CheckStudioUpgradeStatusResponse) {}
+
+  // Memory management RPCs
+  rpc GetWorkflowMemoryConfig (GetWorkflowMemoryConfigRequest) returns (WorkflowMemoryConfig) {}
+  rpc UpdateWorkflowMemoryConfig (UpdateWorkflowMemoryConfigRequest) returns (WorkflowMemoryConfig) {}
   rpc UpgradeStudio (UpgradeStudioRequest) returns (UpgradeStudioResponse) {}
   rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse) {}
   rpc CmlApiCheck (CmlApiCheckRequest) returns (CmlApiCheckResponse) {}
@@ -492,6 +496,7 @@ message McpInstance {
   string status = 8; // Status of the MCP
   repeated string activated_tools = 9; // List of names of tools accessible by the agent. Empty list denotes that all tools are accessible.
   string workflow_id = 10; // mandatory attach to workflow
+  bool is_memory_managed = 11; // True for auto-provisioned memory instances
 }
 
 message ListMcpInstancesRequest {
@@ -568,13 +573,15 @@ message AddAgentRequest {
   string llm_provider_model_id = 2;  // LLM Provider and Model
   repeated string tools_id = 3;     // List of tool IDs
   repeated string mcp_instance_ids = 4; // List of MCP instance IDs
-  CrewAIAgentMetadata crew_ai_agent_metadata = 5; // Crew AI agent metadata 
+  CrewAIAgentMetadata crew_ai_agent_metadata = 5; // Crew AI agent metadata
   optional string template_id = 6; // OPTIONAL build from template
   string workflow_id = 7; // mandatory attach to workflow
   string tmp_agent_image_path = 8; // Image of the agent
 
   // Create tool instances from tool template ids
   repeated string tool_template_ids = 9;
+
+  string memory_mode = 10; // NONE | READ_ONLY | WRITE_ONLY | READ_WRITE
 }
 
 message AddAgentResponse {
@@ -587,11 +594,13 @@ message UpdateAgentRequest {
   string llm_provider_model_id = 3;  // LLM Provider and Model
   repeated string tools_id = 4;     // List of tool IDs
   repeated string mcp_instance_ids = 5; // List of MCP instance IDs
-  CrewAIAgentMetadata crew_ai_agent_metadata = 6; // Crew AI agent metadata 
+  CrewAIAgentMetadata crew_ai_agent_metadata = 6; // Crew AI agent metadata
   string tmp_agent_image_path = 7; // Image of the agent
 
   // Create tool instances from tool template ids
   repeated string tool_template_ids = 8;
+
+  string memory_mode = 9; // NONE | READ_ONLY | WRITE_ONLY | READ_WRITE
 }
 
 message UpdateAgentResponse {}
@@ -608,10 +617,11 @@ message AgentMetadata {
   string llm_provider_model_id = 3;  // LLM Provider and Model
   repeated string tools_id = 4;     // List of tool IDs
   repeated string mcp_instance_ids = 5; // List of MCP instance IDs
-  CrewAIAgentMetadata crew_ai_agent_metadata = 6; // Crew AI agent metadata 
+  CrewAIAgentMetadata crew_ai_agent_metadata = 6; // Crew AI agent metadata
   string agent_image_uri = 7; // Image of the agent
   bool is_valid = 8;     // Is the activated tool valid based on whether the linked tool & model is still active in the studio.
   string workflow_id = 9; // mandatory owner workflow
+  string memory_mode = 10; // NONE | READ_ONLY | WRITE_ONLY | READ_WRITE
 }
 
 message CrewAIAgentMetadata {
@@ -1251,5 +1261,48 @@ message TestToolInstanceRequest {
 
 message TestToolInstanceResponse {
   string trace_id = 1;
+}
+
+// Memory management messages
+
+message MemoryFilterConfig {
+  float dedup_threshold = 1;
+  int32 min_content_length = 2;
+  int32 max_content_length = 3;
+  string store_mode = 4; // AGENT_CONTROLLED | AUTO_WRITE | DISABLED
+}
+
+message MemoryBackendConfig {
+  string embedding_provider = 1; // openai | ollama | local | onnx
+  string embedding_api_key = 2;  // masked in responses
+  string memory_path = 3;        // persistent volume path
+}
+
+message WorkflowMemoryConfig {
+  string id = 1;
+  string workflow_id = 2;
+  bool enabled = 3;
+  string collection_name = 4;
+  bool auto_inject = 5;
+  string session_scope = 6;  // CROSS_SESSION | SESSION_SCOPED
+  MemoryFilterConfig filter_config = 7;
+  MemoryBackendConfig backend_config = 8;
+  string note_schema = 9;
+  string store_mode = 10; // AGENT_CONTROLLED | AUTO_WRITE | DISABLED
+}
+
+message GetWorkflowMemoryConfigRequest {
+  string workflow_id = 1;
+}
+
+message UpdateWorkflowMemoryConfigRequest {
+  string workflow_id = 1;
+  optional bool enabled = 2;
+  optional bool auto_inject = 3;
+  string session_scope = 4;
+  string store_mode = 5;
+  MemoryFilterConfig filter_config = 6;
+  MemoryBackendConfig backend_config = 7;
+  string note_schema = 8;
 }
 

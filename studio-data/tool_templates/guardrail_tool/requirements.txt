@@ -1,0 +1,5 @@
+pydantic>=2.0.0
+requests>=2.31.0
+# Layer 2 local mode only — omit if using mode=api
+transformers>=4.40.0
+torch>=2.0.0
