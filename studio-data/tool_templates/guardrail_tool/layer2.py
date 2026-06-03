@@ -75,24 +75,40 @@ def _check_local(input_text: str, threshold: float) -> LayerResult:
         )
 
     try:
-        result = classifier(input_text[:512], truncation=True)[0]
-        label: str = result["label"].lower()
-        score: float = float(result["score"])
+        # Request ALL label scores (not just the argmax). Prompt-Guard-86M emits
+        # BENIGN / INJECTION / JAILBREAK. Per Meta's guidance, the INJECTION label
+        # fires on almost any instruction-like text and must NOT be used to filter
+        # direct user input — it produces massive false positives on benign
+        # queries (e.g. "what is my account balance"). For user-input guarding we
+        # therefore block ONLY on the JAILBREAK score.
+        raw = classifier(input_text[:512], truncation=True, top_k=None)
+        # For a single input, transformers may return a list[dict] or [list[dict]].
+        if raw and isinstance(raw[0], list):
+            raw = raw[0]
+        scores = {r["label"].lower(): float(r["score"]) for r in raw}
     except Exception as exc:
         return LayerResult(
             blocked=False, threat_categories=[], confidence=0.0,
             reason=f"Layer 2 inference error (non-blocking): {exc}",
         )
 
-    is_benign = label in _BENIGN_LABELS
-    if not is_benign and score >= threshold:
+    # Locate the jailbreak score across label-naming variants (e.g. 'jailbreak'
+    # or 'label_2'). The INJECTION label is intentionally ignored here.
+    jailbreak_score = max(
+        (s for lbl, s in scores.items() if "jail" in lbl or lbl in ("label_2", "2")),
+        default=0.0,
+    )
+
+    if jailbreak_score >= threshold:
         return LayerResult(
             blocked=True,
-            threat_categories=[label],
-            confidence=round(score, 4),
-            reason=f"Prompt-Guard-86M: {label} ({score:.2%} confidence)",
+            threat_categories=["jailbreak"],
+            confidence=round(jailbreak_score, 4),
+            reason=f"Prompt-Guard-86M: jailbreak ({jailbreak_score:.2%} confidence)",
         )
-    return LayerResult(blocked=False, threat_categories=[], confidence=round(score, 4), reason=None)
+    return LayerResult(
+        blocked=False, threat_categories=[], confidence=round(jailbreak_score, 4), reason=None
+    )
 
 
 # ---------------------------------------------------------------------------
